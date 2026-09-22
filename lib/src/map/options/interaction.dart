@@ -96,6 +96,19 @@ class InteractionOptions {
   /// By default, scroll wheel zoom uses smooth animated zooming.
   final ScrollZoomOptions scrollZoomOptions;
 
+  /// Whether pinch zoom gestures snap to whole zoom levels.
+  ///
+  /// When `true`, a single pinch gesture zooms by exactly one whole level -
+  /// in on a spreading pinch, out on a closing one - regardless of how far the
+  /// fingers travel, and further scaling within that same gesture is ignored.
+  ///
+  /// This only affects pinch gestures. To restrict scroll wheel and trackpad
+  /// zooming to whole levels as well, set [scrollZoomOptions] to
+  /// [ScrollZoomOptions.integer]. Double-tap zoom is unaffected.
+  ///
+  /// Defaults to `false`.
+  final bool enableIntegerZoom;
+
   /// Calculates the zoom difference to apply to the initial zoom level when a
   /// user is performing a double-tap drag zoom gesture
   ///
@@ -169,6 +182,7 @@ class InteractionOptions {
     )
     this.scrollWheelVelocity = 0.005,
     this.scrollZoomOptions = const ScrollZoomOptions.smooth(),
+    this.enableIntegerZoom = false,
     this.doubleTapDragZoomChangeCalculator =
         defaultDoubleTapDragZoomChangeCalculator,
     this.doubleTapZoomDuration = const Duration(milliseconds: 200),
@@ -217,6 +231,7 @@ class InteractionOptions {
       pinchMoveWinGestures == other.pinchMoveWinGestures &&
       scrollWheelVelocity == other.scrollWheelVelocity &&
       scrollZoomOptions == other.scrollZoomOptions &&
+      enableIntegerZoom == other.enableIntegerZoom &&
       doubleTapDragZoomChangeCalculator ==
           other.doubleTapDragZoomChangeCalculator &&
       doubleTapZoomDuration == other.doubleTapZoomDuration &&
@@ -237,6 +252,7 @@ class InteractionOptions {
         pinchMoveWinGestures,
         scrollWheelVelocity,
         scrollZoomOptions,
+        enableIntegerZoom,
         doubleTapDragZoomChangeCalculator,
         doubleTapZoomDuration,
         doubleTapZoomCurve,

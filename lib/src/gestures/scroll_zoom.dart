@@ -22,6 +22,8 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_map/src/misc/extensions.dart';
+import 'package:latlong2/latlong.dart';
 
 /// Cubic bezier curve, implicit first and last control points are (0,0) and
 /// (1,1).
@@ -124,6 +126,16 @@ class ScrollZoomHandler {
   double? _targetZoom;
   Offset _cursorPosition = Offset.zero;
 
+  // Integer zooming only: the centre the camera started from and the centre it
+  // is heading for, plus the wall-clock time the current step began.
+  LatLng? _startCenter;
+  LatLng? _targetCenter;
+  int _animStart = 0;
+
+  // The per-frame callback for whichever behaviour is currently animating, so
+  // that the single reused ticker never runs another behaviour's frame logic.
+  void Function()? _frameCallback;
+
   _EasingFn? _easing;
   _PrevEase? _prevEase;
 
@@ -191,6 +203,8 @@ class ScrollZoomHandler {
         _doSmoothZoom(event, o);
       case final SnapScrollZoomOptions o:
         _doSnapZoom(event, o);
+      case final IntegerScrollZoomOptions o:
+        _doIntegerZoom(event, o);
     }
   }
 
@@ -213,6 +227,92 @@ class ScrollZoomHandler {
       hasGesture: true,
       source: MapEventSource.scrollWheel,
     );
+  }
+
+  //! INTEGER ZOOMING
+
+  /// Integer zoom: animate to the next or previous whole zoom level.
+  void _doIntegerZoom(
+    PointerScrollEvent event,
+    IntegerScrollZoomOptions zoomOptions,
+  ) {
+    final minZoom = _options.minZoom ?? 0.0;
+    final maxZoom = _options.maxZoom ?? double.infinity;
+
+    // Step relative to the level the in-flight animation is heading for, so
+    // that ticks arriving mid-animation accumulate instead of restarting from
+    // whatever fractional zoom the animation has currently reached.
+    final baseZoom = _targetZoom ?? _camera.zoom;
+    final steppedZoom = event.scrollDelta.dy < 0
+        ? (baseZoom + 1).floorToDouble()
+        : (baseZoom - 1).ceilToDouble();
+    final newZoom = steppedZoom.clamp(minZoom, maxZoom);
+
+    // Already heading there: usually a zoom limit, where further ticks in the
+    // same direction should do nothing rather than restart the animation.
+    if (newZoom == _targetZoom) return;
+
+    _cursorPosition = event.localPosition;
+
+    final targetCenter = _targetCenter;
+    final LatLng newCenter;
+    if (targetCenter == null) {
+      newCenter = _camera.focusedZoomCenter(_cursorPosition, newZoom);
+    } else {
+      // As `MapCamera.focusedZoomCenter`, but anchored to the target of the
+      // in-flight animation rather than the camera's momentary position -
+      // otherwise the point under the cursor drifts as further ticks arrive.
+      final offset =
+          (_cursorPosition - _camera.nonRotatedSize.center(Offset.zero))
+              .rotate(_camera.rotationRad);
+      final scale = _camera.getZoomScale(newZoom, baseZoom);
+      final newOffset = offset * (1.0 - 1.0 / scale);
+      final mapCenter = _camera.projectAtZoom(targetCenter, baseZoom);
+      newCenter = _camera.unprojectAtZoom(mapCenter + newOffset, baseZoom);
+    }
+
+    _startZoom = _camera.zoom;
+    _startCenter = _camera.center;
+    _targetZoom = newZoom;
+    _targetCenter = newCenter;
+    _animStart = currentTimestamp().millisecondsSinceEpoch;
+
+    _ensureAnimating(() => _renderIntegerFrame(zoomOptions));
+  }
+
+  void _renderIntegerFrame(IntegerScrollZoomOptions zoomOptions) {
+    final startZoom = _startZoom;
+    final startCenter = _startCenter;
+    final targetZoom = _targetZoom;
+    final targetCenter = _targetCenter;
+
+    if (startZoom == null ||
+        startCenter == null ||
+        targetZoom == null ||
+        targetCenter == null) {
+      _stopAnimating();
+      return;
+    }
+
+    final durationMs = zoomOptions.animationDuration.inMilliseconds;
+    final elapsedMs = currentTimestamp().millisecondsSinceEpoch - _animStart;
+    final t = durationMs <= 0 ? 1.0 : (elapsedMs / durationMs).clamp(0.0, 1.0);
+    final k = zoomOptions.curve.transform(t);
+
+    _controller.moveRaw(
+      LatLngTween(begin: startCenter, end: targetCenter).lerp(k),
+      startZoom + (targetZoom - startZoom) * k,
+      hasGesture: true,
+      source: MapEventSource.scrollWheel,
+    );
+
+    if (t >= 1.0) _stopAnimating();
+  }
+
+  void _stopAnimating() {
+    _ticker?.stop();
+    _tickerActive = false;
+    _resetState();
   }
 
   //! SMOOTH ZOOMING
@@ -252,7 +352,7 @@ class ScrollZoomHandler {
         _lastWheelEventTime = currentTimestamp().millisecondsSinceEpoch;
         _delta -= _lastValue;
         _cursorPosition = _pendingEventPosition!;
-        _ensureAnimating(zoomOptions);
+        _ensureAnimating(() => _renderFrame(zoomOptions));
       });
       return;
     } else if (_type == null) {
@@ -276,14 +376,15 @@ class ScrollZoomHandler {
     // the user uses.
     if (_type != null) {
       _delta -= value;
-      _ensureAnimating(zoomOptions);
+      _ensureAnimating(() => _renderFrame(zoomOptions));
     }
   }
 
-  void _ensureAnimating(SmoothScrollZoomOptions zoomOptions) {
+  void _ensureAnimating(void Function() onFrame) {
+    _frameCallback = onFrame;
     if (_tickerActive) return;
 
-    _ticker ??= _vsync.createTicker((_) => _renderFrame(zoomOptions));
+    _ticker ??= _vsync.createTicker((_) => _frameCallback?.call());
     if (!_ticker!.isActive) {
       _ticker!.start();
     }
@@ -374,6 +475,8 @@ class ScrollZoomHandler {
   void _resetState() {
     _startZoom = null;
     _targetZoom = null;
+    _startCenter = null;
+    _targetCenter = null;
     _prevEase = null;
     _easing = null;
   }

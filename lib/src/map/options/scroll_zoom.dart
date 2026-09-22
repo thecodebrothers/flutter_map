@@ -1,21 +1,24 @@
+import 'package:flutter/animation.dart';
 import 'package:flutter_map/src/map/options/interaction.dart';
 import 'package:meta/meta.dart';
 
 /// Options to configure scroll zoom behavior.
 ///
-/// Two behaviours are available:
+/// Three behaviours are available:
 ///  * Smooth (default, available since v8.4): [ScrollZoomOptions.smooth]
 ///  * Snap: [ScrollZoomOptions.snap]
+///  * Integer: [ScrollZoomOptions.integer]
 ///
 /// Remember when customising zoom rates that the behaviour will differ between
 /// platform and hardware, which is very difficult to disambiguate accurately to
 /// use to inform the zoom rate. Therefore, values should be used which are
 /// likely to work well for many users across many environments.
 ///
-/// The behaviour difference only applies to mouse wheel inputs. Trackpad events
-/// are always applied without smoothing regardless of the behaviour, since
+/// For smooth and snap zooming, the behaviour difference only applies to mouse
+/// wheel inputs. Trackpad events are always applied without smoothing, since
 /// trackpad hardware drivers usually already provide fine-grained continuous
-/// input.
+/// input. Integer zooming is the exception: it applies to both input methods
+/// equally.
 ///
 /// Note that on some platforms, the trackpad behaves differently - for example,
 /// scrolling may scroll on some, or pan on others. This cannot be overcome
@@ -38,6 +41,14 @@ sealed class ScrollZoomOptions {
   /// See [SnapScrollZoomOptions] for more information.
   const factory ScrollZoomOptions.snap({double zoomRate}) =
       SnapScrollZoomOptions;
+
+  /// Use and configure integer scroll zooming.
+  ///
+  /// See [IntegerScrollZoomOptions] for more information.
+  const factory ScrollZoomOptions.integer({
+    Duration animationDuration,
+    Curve curve,
+  }) = IntegerScrollZoomOptions;
 }
 
 /// When smooth scroll zooming, each mouse wheel tick triggers a short eased
@@ -126,4 +137,50 @@ class SnapScrollZoomOptions extends ScrollZoomOptions {
 
   @override
   int get hashCode => zoomRate.hashCode;
+}
+
+/// When integer scroll zooming, each mouse wheel tick animates to the next or
+/// previous whole zoom level, so the camera always comes to rest on an integer
+/// zoom.
+///
+/// This suits tile sets that only look correct at native zoom levels, where the
+/// fractional zooms produced by [SmoothScrollZoomOptions] and
+/// [SnapScrollZoomOptions] would leave tiles scaled and blurry.
+///
+/// Rapid successive wheel ticks accumulate: each tick steps one level beyond
+/// the level the in-flight animation is already heading for, rather than
+/// restarting from wherever the animation happens to have reached. The point
+/// under the cursor stays anchored to the ultimate target throughout.
+///
+/// Unlike the other behaviours, trackpad events are treated identically to
+/// mouse wheel events, since a whole-level step is not meaningful at the
+/// fine-grained resolution a trackpad reports.
+///
+/// To also restrict pinch gestures to whole zoom levels, see
+/// [InteractionOptions.enableIntegerZoom].
+class IntegerScrollZoomOptions extends ScrollZoomOptions {
+  /// Duration of the animation to the next whole zoom level.
+  ///
+  /// Defaults to 200ms.
+  final Duration animationDuration;
+
+  /// Easing curve applied to the animation to the next whole zoom level.
+  ///
+  /// Defaults to [Curves.fastOutSlowIn].
+  final Curve curve;
+
+  /// Use and configure integer scroll zooming.
+  const IntegerScrollZoomOptions({
+    this.animationDuration = const Duration(milliseconds: 200),
+    this.curve = Curves.fastOutSlowIn,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      other is IntegerScrollZoomOptions &&
+      animationDuration == other.animationDuration &&
+      curve == other.curve;
+
+  @override
+  int get hashCode => Object.hash(animationDuration, curve);
 }

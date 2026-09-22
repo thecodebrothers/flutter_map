@@ -73,6 +73,10 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
   var _dragStarted = false;
   var _flingAnimationStarted = false;
 
+  /// Whether the current pinch gesture has already performed its single whole
+  /// zoom level step, when [InteractionOptions.enableIntegerZoom] is set.
+  var _didZoomInThisGesture = false;
+
   /// Helps to reset ScaleUpdateDetails.scale back to 1.0 when a multi finger
   /// gesture wins
   late double _scaleCorrector;
@@ -531,6 +535,7 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
     _closeFlingAnimationController(eventSource);
     _closeDoubleTapController(eventSource);
 
+    _didZoomInThisGesture = false;
     _gestureWinner = MultiFingerGesture.none;
 
     _mapZoomStart = _camera.zoom;
@@ -638,11 +643,36 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
     var newZoom = _camera.zoom;
 
     // Handle pinch zoom.
-    if (hasPinchZoom && details.scale > 0.0) {
-      newZoom = _getZoomForScale(
-        _mapZoomStart,
-        details.scale + _scaleCorrector,
-      );
+    if (hasPinchZoom && details.scale != 1.0) {
+      if (_interactionOptions.enableIntegerZoom) {
+        // Step a single whole level per gesture, then ignore further scaling
+        // until the fingers are lifted.
+        if (!_didZoomInThisGesture) {
+          final steppedZoom = details.scale > 1.0
+              ? (_camera.zoom + 1).floorToDouble()
+              : (_camera.zoom - 1).ceilToDouble();
+          final clampedZoom = steppedZoom.clamp(
+            _options.minZoom ?? 0.0,
+            _options.maxZoom ?? double.infinity,
+          );
+
+          if (clampedZoom != _camera.zoom) {
+            _startDoubleTapAnimation(
+              clampedZoom,
+              _camera.focusedZoomCenter(details.localFocalPoint, clampedZoom),
+            );
+            _didZoomInThisGesture = true;
+          }
+        }
+
+        // The animation drives the zoom; leave the camera alone this frame.
+        newZoom = _camera.zoom;
+      } else {
+        newZoom = _getZoomForScale(
+          _mapZoomStart,
+          details.scale + _scaleCorrector,
+        );
+      }
 
       // Handle starting of pinch zoom.
       if (!_pinchZoomStarted && newZoom != _mapZoomStart) {
@@ -761,6 +791,7 @@ class MapInteractiveViewerState extends State<MapInteractiveViewer>
 
   void _handleScaleEnd(ScaleEndDetails details) {
     _resetDoubleTapHold();
+    _didZoomInThisGesture = false;
 
     final eventSource =
         _dragMode ? MapEventSource.dragEnd : MapEventSource.multiFingerEnd;
