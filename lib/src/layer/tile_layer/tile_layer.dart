@@ -227,6 +227,18 @@ class TileLayer extends StatefulWidget {
   /// the [key].
   final TileUpdateTransformer tileUpdateTransformer;
 
+  /// Whether to immediately discard tiles from the previous zoom level as soon
+  /// as the (native) zoom level changes.
+  ///
+  /// By default (`false`), tiles are only pruned once the new level's tiles
+  /// have loaded, and tiles within [panBuffer] + [keepBuffer] are retained, so
+  /// the old level remains visible underneath during the transition.
+  ///
+  /// Setting this to `true` prunes with a buffer of 0 the moment the zoom level
+  /// changes, which avoids stale tiles from the previous level showing through,
+  /// at the cost of briefly displaying empty space while the new tiles load.
+  final bool pruneOnZoomChange;
+
   /// Create a new [TileLayer] for the [FlutterMap] widget.
   TileLayer({
     super.key,
@@ -262,6 +274,7 @@ class TileLayer extends StatefulWidget {
     this.tileBounds,
     TileUpdateTransformer? tileUpdateTransformer,
     String userAgentPackageName = 'unknown',
+    this.pruneOnZoomChange = false,
   })  : assert(
           tileDisplay.when(
             instantaneous: (_) => true,
@@ -378,6 +391,10 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
   Timer? _pruneLater;
 
   StreamSubscription<void>? _resetSub;
+
+  /// The native zoom level at which [TileLayer.pruneOnZoomChange] last pruned,
+  /// used to prune exactly once per zoom level change.
+  int? _lastPrunedZoom;
 
   // REMOVE once `tileSize` is removed, and replace references with
   // `widget.tileDimension`
@@ -636,6 +653,18 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
       viewingZoom: event.zoom,
     );
 
+    // Discard the previous zoom level's tiles straight away, instead of
+    // keeping them visible underneath until the new level has loaded.
+    if (widget.pruneOnZoomChange && _lastPrunedZoom != tileZoom) {
+      _tileImageManager.evictAndPrune(
+        visibleRange: visibleTileRange,
+        pruneBuffer: 0,
+        evictStrategy: widget.evictErrorTileStrategy,
+      );
+      _lastPrunedZoom = tileZoom;
+      if (mounted) setState(() {});
+    }
+
     if (event.load && !_outsideZoomLimits(tileZoom)) {
       _loadTiles(visibleTileRange, pruneAfterLoad: event.prune);
     }
@@ -646,6 +675,8 @@ class _TileLayerState extends State<TileLayer> with TickerProviderStateMixin {
         pruneBuffer: widget.panBuffer + widget.keepBuffer,
         evictStrategy: widget.evictErrorTileStrategy,
       );
+
+      if (!widget.pruneOnZoomChange) _lastPrunedZoom = tileZoom;
     }
   }
 
